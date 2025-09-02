@@ -52,71 +52,81 @@ def process_excel(input_file):
     # Load employee data
     employee_df = pd.read_excel(input_file, header=0)
 
-    # Get unique branches
-    branch_col_index = column_index_from_string('AD') - 1
-    branches = employee_df.iloc[:, branch_col_index].dropna().unique()
-
     # Create in-memory ZIP file
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'a', zipfile.ZIP_DEFLATED, False) as zip_file:
         total_added = 0
-        branch_counts = {}
+        file_counts = {}
 
-        for branch in branches:
-            branch_rows = employee_df[employee_df.iloc[:, branch_col_index] == branch]
-            excel_filename = f"{branch}.xlsx"
-            start_row = 10  # Data starts at row 10
-            added_count = 0
+        chunk_size = 100
+        existing_ids = set()
+        file_index = 1
+        row_count = 0
 
-            # Create new workbook from template
-            wb = load_workbook('template.xlsx')
-            ws = wb.active
-            existing_ids = set()
-            row_num = start_row
+        # Create the first workbook
+        wb = load_workbook('template.xlsx')
+        ws = wb.active
+        start_row = 10
+        row_num = start_row
 
-            # Write new data
-            for _, row in branch_rows.iterrows():
-                emp_id = str(row.iloc[column_index_from_string(UNIQUE_COL_SRC)-1]).strip()
-                if emp_id in existing_ids:
-                    continue
-                
-                values = extract_mapped_values(row)
-                val_index = 0
+        for _, row in employee_df.iterrows():
+            emp_id = str(row.iloc[column_index_from_string(UNIQUE_COL_SRC)-1]).strip()
+            if emp_id in existing_ids:  # Skip duplicates completely
+                continue
 
-                for src_range, dest_range in mappings.items():
-                    if ':' in dest_range:
-                        start_col, end_col = dest_range.split(':')
-                        dest_cols = range(column_index_from_string(start_col), column_index_from_string(end_col)+1)
-                    else:
-                        dest_cols = [column_index_from_string(dest_range)]
+            existing_ids.add(emp_id)
+            values = extract_mapped_values(row)
+            val_index = 0
 
-                    for col_idx in dest_cols:
-                        # Copy existing cell style from template
-                        existing_cell = ws.cell(row=row_num, column=col_idx)
-                        new_cell = ws.cell(row=row_num, column=col_idx, value=values[val_index])
-                        if existing_cell.has_style:
-                            new_cell.font = copy(existing_cell.font)
-                            new_cell.border = copy(existing_cell.border)
-                            new_cell.fill = copy(existing_cell.fill)
-                            new_cell.number_format = copy(existing_cell.number_format)
-                            new_cell.protection = copy(existing_cell.protection)
-                            new_cell.alignment = copy(existing_cell.alignment)
-                        
-                        val_index += 1
+            for src_range, dest_range in mappings.items():
+                if ':' in dest_range:
+                    start_col, end_col = dest_range.split(':')
+                    dest_cols = range(column_index_from_string(start_col), column_index_from_string(end_col)+1)
+                else:
+                    dest_cols = [column_index_from_string(dest_range)]
 
-                existing_ids.add(emp_id)
-                row_num += 1
-                added_count += 1
+                for col_idx in dest_cols:
+                    existing_cell = ws.cell(row=row_num, column=col_idx)
+                    new_cell = ws.cell(row=row_num, column=col_idx, value=values[val_index])
+                    if existing_cell.has_style:
+                        new_cell.font = copy(existing_cell.font)
+                        new_cell.border = copy(existing_cell.border)
+                        new_cell.fill = copy(existing_cell.fill)
+                        new_cell.number_format = copy(existing_cell.number_format)
+                        new_cell.protection = copy(existing_cell.protection)
+                        new_cell.alignment = copy(existing_cell.alignment)
+                    
+                    val_index += 1
 
-            # Save Excel file to ZIP
+            row_num += 1
+            row_count += 1
+            total_added += 1
+
+            # If we reached 100, save file and reset
+            if row_count == chunk_size:
+                excel_buffer = BytesIO()
+                wb.save(excel_buffer)
+                excel_filename = f"output_{file_index}.xlsx"
+                zip_file.writestr(excel_filename, excel_buffer.getvalue())
+                file_counts[excel_filename] = row_count
+
+                # Reset counters for next file
+                file_index += 1
+                row_count = 0
+                wb = load_workbook('template.xlsx')
+                ws = wb.active
+                row_num = start_row
+
+        # Save last file if it has rows
+        if row_count > 0:
             excel_buffer = BytesIO()
             wb.save(excel_buffer)
+            excel_filename = f"output_{file_index}.xlsx"
             zip_file.writestr(excel_filename, excel_buffer.getvalue())
-            branch_counts[branch] = added_count
-            total_added += added_count
+            file_counts[excel_filename] = row_count
 
     zip_buffer.seek(0)
-    return zip_buffer, total_added, branch_counts
+    return zip_buffer, total_added, file_counts
 
 def main():
     st.set_page_config(
@@ -129,6 +139,7 @@ def main():
     st.write("The processed file will be available for download as a ZIP file containing individual branch files.")
     st.write("Make sure your file have concatenated first name and last name and add it in AE column.")
     st.write("Formula for AE column: =CONCAT(B2,C2)")
+    st.write("Make sure also to have 1 tab only")
 
     uploaded_file = st.file_uploader("Choose an Excel file", type=['xlsx', 'xls'])
     output_filename = st.text_input("Output ZIP filename (without .zip)", "output")
@@ -147,12 +158,13 @@ def main():
             )
             
             st.write("### Processing Summary")
-            st.write(f"Total branches processed: {len(branch_counts)}")
+            st.write(f"Total batches processed: {len(branch_counts)}")
             st.write(f"Total rows added: {total_added}")
             for branch, count in branch_counts.items():
                 st.write(f"- {branch}: {count} rows")
                 
         except Exception as e:
+            # st.error(f"Please check your column AE, and you have a formula for it.")
             st.error(f"An error occurred: {str(e)}")
 
 if __name__ == '__main__':
