@@ -136,7 +136,7 @@ def main():
     )
     st.title("Security Bank Processor")
     st.write("Upload your file to process it according to the template.")
-    st.write("The processed file will be available for download as a ZIP file containing individual branch files.")
+    st.write("The processed file will be available for download as a ZIP file containing of 100 limit data/rows per file.")
     st.write("Make sure your file have concatenated first name and last name and add it in AE column.")
     st.write("Formula for AE column: =CONCAT(B2,C2)")
     st.write("Make sure also to have 1 tab only")
